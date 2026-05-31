@@ -6,6 +6,8 @@
 #include "proc.h"
 #include "defs.h"
 
+extern pagetable_t kernel_pagetable;
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -38,7 +40,7 @@ procinit(void)
       if(pa == 0)
         panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      kvmmap(kernel_pagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
   }
   kvminithart();
@@ -113,6 +115,14 @@ found:
     return 0;
   }
 
+  // A per-process kernel page table.
+  if((p->kpagetable = kvmmake()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  kvmmap(p->kpagetable, p->kstack, kvmpa(p->kstack), PGSIZE, PTE_R | PTE_W);
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -139,6 +149,10 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if(p->kpagetable)
+    kvmfree(p->kpagetable);
+  p->kpagetable = 0;
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
