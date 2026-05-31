@@ -162,10 +162,14 @@ kerneltrap()
 void
 clockintr()
 {
-  acquire(&tickslock);
-  ticks++;
-  wakeup(&ticks);
-  release(&tickslock);
+  if(cpuid() == 0){
+    acquire(&tickslock);
+    ticks++;
+    wakeup(&ticks);
+    release(&tickslock);
+  }
+
+  w_stimecmp(r_time() + 1000000);
 }
 
 // check if it's an external interrupt or software interrupt,
@@ -200,18 +204,8 @@ devintr()
       plic_complete(irq);
 
     return 1;
-  } else if(scause == 0x8000000000000001L){
-    // software interrupt from a machine-mode timer interrupt,
-    // forwarded by timervec in kernelvec.S.
-
-    if(cpuid() == 0){
-      clockintr();
-    }
-    
-    // acknowledge the software interrupt by clearing
-    // the SSIP bit in sip.
-    w_sip(r_sip() & ~2);
-
+  } else if(scause == 0x8000000000000005L) {
+    clockintr();
     return 2;
   } else {
     return 0;
