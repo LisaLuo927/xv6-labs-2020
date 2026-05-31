@@ -350,5 +350,53 @@ sfence_vma()
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
 
+
+// Modern QEMU compatibility helpers.
+
+static inline uint64
+r_stimecmp()
+{
+  uint64 x;
+  asm volatile("csrr %0, 0x14d" : "=r" (x));
+  return x;
+}
+
+
+static inline void
+w_stimecmp(uint64 x)
+{
+  asm volatile("csrw 0x14d, %0" : : "r" (x));
+}
+
+
+static inline uint64
+r_menvcfg()
+{
+  uint64 x;
+  asm volatile("csrr %0, 0x30a" : "=r" (x));
+  return x;
+}
+
+
+static inline void
+w_menvcfg(uint64 x)
+{
+  asm volatile("csrw 0x30a, %0" : : "r" (x));
+}
+
+
+static inline void
+w_pmpcfg0(uint64 x)
+{
+  asm volatile("csrw pmpcfg0, %0" : : "r" (x));
+}
+
+
+static inline void
+w_pmpaddr0(uint64 x)
+{
+  asm volatile("csrw pmpaddr0, %0" : : "r" (x));
+}
+
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
