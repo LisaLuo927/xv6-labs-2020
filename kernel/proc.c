@@ -234,6 +234,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  u2kvmcopy(p->pagetable, p->kpagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -252,14 +253,19 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint sz;
+  uint64 sz, oldsz, newsz;
   struct proc *p = myproc();
 
   sz = p->sz;
+  oldsz = sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+    newsz = sz + n;
+    if(newsz < sz || PGROUNDUP(newsz) >= PLIC)
       return -1;
-    }
+    if((sz = uvmalloc(p->pagetable, sz, newsz)) == 0)
+      return -1;
+    u2kvmcopy(p->pagetable, p->kpagetable, oldsz, sz);
+    sfence_vma();
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -288,6 +294,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  u2kvmcopy(np->pagetable, np->kpagetable, 0, np->sz);
 
   np->parent = p;
 
@@ -487,7 +494,13 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
+
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

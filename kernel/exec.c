@@ -74,6 +74,8 @@ exec(char *path, char **argv)
   uvmclear(pagetable, sz-2*PGSIZE);
   sp = sz;
   stackbase = sp - PGSIZE;
+  if(sz >= PLIC)
+    goto bad;
 
   // Push argument strings, prepare rest of stack in ustack.
   for(argc = 0; argv[argc]; argc++) {
@@ -110,6 +112,8 @@ exec(char *path, char **argv)
     
   // Commit to the user image.
   oldpagetable = p->pagetable;
+  u2kvmcopy(pagetable, p->kpagetable, 0, sz);
+  sfence_vma();
   p->pagetable = pagetable;
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
