@@ -9,6 +9,8 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define STEAL_BATCH 64
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -21,12 +23,14 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for(int i = 0; i < NCPU; i++)
+    initlock(&kmem[i].lock, "kmem");
+
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +60,13 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -68,13 +75,51 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
-  struct run *r;
+  struct run *r = 0;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
+  push_off();
+  int id = cpuid();
+
+  acquire(&kmem[id].lock);
+  r = kmem[id].freelist;
   if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+    kmem[id].freelist = r->next;
+  release(&kmem[id].lock);
+
+  if(r == 0){
+    for(int i = 0; i < NCPU; i++){
+      if(i == id)
+        continue;
+
+      acquire(&kmem[i].lock);
+      r = kmem[i].freelist;
+      if(r){
+        struct run *tail = r;
+        int n = 1;
+        while(n < STEAL_BATCH && tail->next){
+          tail = tail->next;
+          n++;
+        }
+
+        kmem[i].freelist = tail->next;
+        tail->next = 0;
+        release(&kmem[i].lock);
+
+        struct run *rest = r->next;
+        r->next = 0;
+        if(rest){
+          acquire(&kmem[id].lock);
+          tail->next = kmem[id].freelist;
+          kmem[id].freelist = rest;
+          release(&kmem[id].lock);
+        }
+        break;
+      }
+      release(&kmem[i].lock);
+    }
+  }
+
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
