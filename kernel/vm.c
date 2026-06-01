@@ -348,6 +348,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
+  int need_flush = 0;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -361,7 +362,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if(flags & PTE_W){
       flags = (flags & ~PTE_W) | PTE_COW;
       *pte = PA2PTE(pa) | flags;
-      sfence_vma();
+      need_flush = 1;
     }
 
     kincref((void*)pa);
@@ -370,9 +371,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       goto err;
     }
   }
+  if(need_flush)
+    sfence_vma();
   return 0;
 
  err:
+  if(need_flush)
+    sfence_vma();
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
