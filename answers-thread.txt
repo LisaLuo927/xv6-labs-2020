@@ -1,0 +1,5 @@
+Two threads can lose keys when they insert into the same hash bucket at the same time.
+
+For example, suppose table[i] initially points to old. Thread 0 inserts key k0 and reads old table[i]. Thread 1 inserts key k1 and also reads the same old table[i]. Thread 0 allocates e0, sets e0->next = old, and stores table[i] = e0. Then thread 1 allocates e1, sets e1->next = old, and stores table[i] = e1. Thread 1's final store overwrites table[i] = e0, so e0 and key k0 become unreachable.
+
+Both get threads report the same missing keys because each get_thread scans all NKEYS keys, not just the keys inserted by that thread.
