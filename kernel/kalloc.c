@@ -23,10 +23,22 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct {
+  struct spinlock lock;
+  int cnt[(PHYSTOP - KERNBASE) / PGSIZE];
+} kmem_ref;
+
+static int
+pa_index(void *pa)
+{
+  return ((uint64)pa - KERNBASE) / PGSIZE;
+}
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&kmem_ref.lock, "kmem_ref");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -35,8 +47,12 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+    acquire(&kmem_ref.lock);
+    kmem_ref.cnt[pa_index(p)] = 1;
+    release(&kmem_ref.lock);
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -50,6 +66,16 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  acquire(&kmem_ref.lock);
+  if(kmem_ref.cnt[pa_index(pa)] < 1)
+    panic("kfree ref");
+  kmem_ref.cnt[pa_index(pa)]--;
+  if(kmem_ref.cnt[pa_index(pa)] > 0){
+    release(&kmem_ref.lock);
+    return;
+  }
+  release(&kmem_ref.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +102,38 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    acquire(&kmem_ref.lock);
+    kmem_ref.cnt[pa_index(r)] = 1;
+    release(&kmem_ref.lock);
+  }
   return (void*)r;
+}
+
+void
+kincref(void *pa)
+{
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kincref");
+
+  acquire(&kmem_ref.lock);
+  if(kmem_ref.cnt[pa_index(pa)] < 1)
+    panic("kincref ref");
+  kmem_ref.cnt[pa_index(pa)]++;
+  release(&kmem_ref.lock);
+}
+
+int
+krefcnt(void *pa)
+{
+  int cnt;
+
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("krefcnt");
+
+  acquire(&kmem_ref.lock);
+  cnt = kmem_ref.cnt[pa_index(pa)];
+  release(&kmem_ref.lock);
+  return cnt;
 }
