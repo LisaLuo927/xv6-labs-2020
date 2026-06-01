@@ -299,6 +299,43 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+int
+cowalloc(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  uint flags;
+  char *mem;
+
+  if(va >= MAXVA)
+    return -1;
+
+  va = PGROUNDDOWN(va);
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return -1;
+  if((*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_COW) == 0)
+    return -1;
+
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+
+  if(krefcnt((void*)pa) == 1){
+    *pte = PA2PTE(pa) | ((flags | PTE_W) & ~PTE_COW);
+    sfence_vma();
+    return 0;
+  }
+
+  if((mem = kalloc()) == 0)
+    return -1;
+
+  memmove(mem, (char*)pa, PGSIZE);
+  *pte = PA2PTE(mem) | ((flags | PTE_W) & ~PTE_COW);
+  kfree((void*)pa);
+  sfence_vma();
+  return 0;
+}
+
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
