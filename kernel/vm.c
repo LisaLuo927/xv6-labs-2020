@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -96,15 +98,28 @@ walkaddr(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
   uint64 pa;
+  struct proc *p = myproc();
 
   if(va >= MAXVA)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  if(pte == 0 || (*pte & PTE_V) == 0){
+    if(p == 0 || va >= p->sz || va < p->trapframe->sp)
+      return 0;
+
+    uint64 va0 = PGROUNDDOWN(va);
+    char *mem = kalloc();
+    if(mem == 0)
+      return 0;
+    memset(mem, 0, PGSIZE);
+    if(mappages(pagetable, va0, PGSIZE, (uint64)mem, PTE_R|PTE_W|PTE_X|PTE_U) != 0){
+      kfree(mem);
+      return 0;
+    }
+    pte = walk(pagetable, va, 0);
+  }
+
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
