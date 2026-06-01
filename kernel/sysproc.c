@@ -48,7 +48,12 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = p->sz;
-  p->sz += n;
+  if(n < 0){
+    if(growproc(n) < 0)
+      return -1;
+  } else {
+    p->sz += n;
+  }
   return addr;
 }
 
