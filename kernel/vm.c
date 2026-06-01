@@ -322,7 +322,7 @@ cowalloc(pagetable_t pagetable, uint64 va)
 
   if(krefcnt((void*)pa) == 1){
     *pte = PA2PTE(pa) | ((flags | PTE_W) & ~PTE_COW);
-    sfence_vma();
+    sfence_vma_page(va);
     return 0;
   }
 
@@ -332,7 +332,7 @@ cowalloc(pagetable_t pagetable, uint64 va)
   memmove(mem, (char*)pa, PGSIZE);
   *pte = PA2PTE(mem) | ((flags | PTE_W) & ~PTE_COW);
   kfree((void*)pa);
-  sfence_vma();
+  sfence_vma_page(va);
   return 0;
 }
 
