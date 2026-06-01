@@ -401,8 +401,12 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA)
+      return -1;
 
     if((pte = walk(pagetable, va0, 0)) == 0)
+      return -1;
+    if((*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
       return -1;
     if(*pte & PTE_COW){
       if(cowalloc(pagetable, va0) < 0)
