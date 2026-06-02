@@ -570,8 +570,184 @@ sys_mmap(void)
   return mapaddr;
 }
 
+int
+mmap_fault(uint64 va, uint64 scause)
+{
+  struct proc *p = myproc();
+  struct vma *v = 0;
+  uint64 addr = PGROUNDDOWN(va);
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used &&
+       addr >= p->vmas[i].addr &&
+       addr < p->vmas[i].addr + p->vmas[i].length){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return -1;
+
+  if(scause == 13 && (v->prot & PROT_READ) == 0)
+    return -1;
+  if(scause == 15 && (v->prot & PROT_WRITE) == 0)
+    return -1;
+  if(scause == 12 && (v->prot & PROT_EXEC) == 0)
+    return -1;
+
+  char *mem = kalloc();
+  if(mem == 0)
+    return -1;
+  memset(mem, 0, PGSIZE);
+
+  int perm = PTE_U;
+  if(v->prot & PROT_READ)
+    perm |= PTE_R;
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_W | PTE_R;
+  if(v->prot & PROT_EXEC)
+    perm |= PTE_X;
+
+  uint64 pageoff = addr - v->addr;
+  uint n = PGSIZE;
+  if(pageoff + n > v->length)
+    n = v->length - pageoff;
+
+  ilock(v->file->ip);
+  int r = readi(v->file->ip, 0, (uint64)mem, v->offset + pageoff, n);
+  iunlock(v->file->ip);
+
+  if(r < 0){
+    kfree(mem);
+    return -1;
+  }
+
+  if(mappages(p->pagetable, addr, PGSIZE, (uint64)mem, perm) != 0){
+    kfree(mem);
+    return -1;
+  }
+
+  return 0;
+}
+
+static int
+mmap_writeback(struct vma *v, uint64 addr, uint64 length)
+{
+  struct proc *p = myproc();
+  uint64 end = addr + length;
+
+  if(v->flags != MAP_SHARED || (v->prot & PROT_WRITE) == 0)
+    return 0;
+
+  for(uint64 a = addr; a < end; a += PGSIZE){
+    uint64 pa = walkaddr(p->pagetable, a);
+    if(pa == 0)
+      continue;
+
+    uint n = PGSIZE;
+    if(a + n > end)
+      n = end - a;
+
+    begin_op();
+    ilock(v->file->ip);
+    int r = writei(v->file->ip, 0, pa, v->offset + (a - v->addr), n);
+    iunlock(v->file->ip);
+    end_op();
+
+    if(r != n)
+      return -1;
+  }
+
+  return 0;
+}
+
+void
+mmap_cleanup(struct proc *p)
+{
+  for(int i = 0; i < NVMA; i++){
+    struct vma *v = &p->vmas[i];
+    if(!v->used)
+      continue;
+
+    uint64 addr = v->addr;
+    uint64 end = v->addr + v->length;
+
+    mmap_writeback(v, addr, v->length);
+
+    for(uint64 a = addr; a < end; a += PGSIZE){
+      if(walkaddr(p->pagetable, a) != 0)
+        uvmunmap(p->pagetable, a, 1, 1);
+    }
+
+    fileclose(v->file);
+    memset(v, 0, sizeof(*v));
+  }
+}
+
+void
+mmap_copy(struct proc *p, struct proc *np)
+{
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      np->vmas[i] = p->vmas[i];
+      filedup(np->vmas[i].file);
+    }
+  }
+}
+
 uint64
 sys_munmap(void)
 {
-  return -1;
+  uint64 addr;
+  int length;
+  struct proc *p = myproc();
+  struct vma *v = 0;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+
+  if(length <= 0 || addr % PGSIZE)
+    return -1;
+
+  uint64 len = PGROUNDUP(length);
+  uint64 end = addr + len;
+  if(end < addr)
+    return -1;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used &&
+       addr >= p->vmas[i].addr &&
+       end <= p->vmas[i].addr + p->vmas[i].length){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return -1;
+
+  if(addr != v->addr && end != v->addr + v->length)
+    return -1;
+
+  if(mmap_writeback(v, addr, len) < 0)
+    return -1;
+
+  for(uint64 a = addr; a < end; a += PGSIZE){
+    if(walkaddr(p->pagetable, a) != 0)
+      uvmunmap(p->pagetable, a, 1, 1);
+  }
+
+  if(addr == v->addr && len == v->length){
+    fileclose(v->file);
+    memset(v, 0, sizeof(*v));
+  } else if(addr == v->addr){
+    v->addr += len;
+    v->length -= len;
+    v->offset += len;
+  } else {
+    v->length -= len;
+  }
+
+  return 0;
 }

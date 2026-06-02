@@ -296,6 +296,8 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  mmap_copy(p, np);
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -343,6 +345,8 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  mmap_cleanup(p);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
