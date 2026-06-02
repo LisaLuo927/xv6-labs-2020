@@ -6,6 +6,7 @@
 
 #include "types.h"
 #include "riscv.h"
+#include "memlayout.h"
 #include "defs.h"
 #include "param.h"
 #include "stat.h"
@@ -485,10 +486,88 @@ sys_pipe(void)
   return 0;
 }
 
+static int
+vma_overlap(struct proc *p, uint64 addr, uint64 length)
+{
+  uint64 end = addr + length;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      uint64 a = p->vmas[i].addr;
+      uint64 e = p->vmas[i].addr + p->vmas[i].length;
+      if(addr < e && a < end)
+        return 1;
+    }
+  }
+  return 0;
+}
+
+static uint64
+vma_find_addr(struct proc *p, uint64 length)
+{
+  uint64 addr = PGROUNDDOWN(TRAPFRAME - length);
+
+  while(addr >= p->sz + PGSIZE){
+    if(!vma_overlap(p, addr, length))
+      return addr;
+    addr -= PGSIZE;
+  }
+
+  return 0;
+}
+
 uint64
 sys_mmap(void)
 {
-  return -1;
+  uint64 addrarg;
+  int length, prot, flags, fd, offset;
+  struct file *f;
+  struct proc *p = myproc();
+  struct vma *v = 0;
+
+  if(argaddr(0, &addrarg) < 0 || argint(1, &length) < 0 ||
+     argint(2, &prot) < 0 || argint(3, &flags) < 0 ||
+     argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0)
+    return -1;
+
+  if(addrarg != 0 || length <= 0 || offset != 0)
+    return -1;
+
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+
+  if((prot & PROT_READ) && !f->readable)
+    return -1;
+
+  if((flags == MAP_SHARED) && (prot & PROT_WRITE) && !f->writable)
+    return -1;
+
+  for(int i = 0; i < NVMA; i++){
+    if(!p->vmas[i].used){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return -1;
+
+  uint64 maplen = PGROUNDUP(length);
+  uint64 mapaddr = vma_find_addr(p, maplen);
+  if(mapaddr == 0)
+    return -1;
+
+  filedup(f);
+
+  v->used = 1;
+  v->addr = mapaddr;
+  v->length = maplen;
+  v->prot = prot;
+  v->flags = flags;
+  v->file = f;
+  v->offset = offset;
+
+  return mapaddr;
 }
 
 uint64
